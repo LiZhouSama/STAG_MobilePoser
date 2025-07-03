@@ -14,7 +14,6 @@ env/
 *.tmp
 *.cache
 *.dat
-*.csv
 *.json
 *.txt
 *.xml
