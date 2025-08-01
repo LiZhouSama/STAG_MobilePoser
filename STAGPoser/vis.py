@@ -761,7 +761,7 @@ def visualize_processed_imu_data(data_dict, combo='lw_rp', output_file='processe
 if __name__ == "__main__":
     args = ArgumentParser()
     args.add_argument('--model', type=str, default=None, help='模型权重文件路径')
-    args.add_argument('--data', type=str, default='mobileposer/stag_raw_data/aligned_imu_data_normalized.pt', 
+    args.add_argument('--data', type=str, default='STAGPoser/STAG_data/aligned_imu_data_normalized.pt', 
                      help='处理好的IMU数据文件路径')
     args.add_argument('--combo', type=str, default='lw_rp', 
                      help='IMU组合方式')
@@ -769,7 +769,7 @@ if __name__ == "__main__":
     args.add_argument('--save-only', action='store_true', help='只保存结果，不进行实时可视化')
     args.add_argument('--output', type=str, default='prediction_results.pt', help='输出文件名')
     args.add_argument('--visualize-processed-imu', action='store_true', help='可视化处理后的IMU数据（降采样和除以acc_scale后）')
-    args.add_argument('--imu-output', type=str, default='mobileposer/stag_raw_data/processed_imu_data_visualization.png', help='IMU数据可视化输出文件名')
+    args.add_argument('--imu-output', type=str, default='STAGPoser/STAG_data/processed_imu_data_visualization.png', help='IMU数据可视化输出文件名')
     args = args.parse_args()
 
     # 检查combo是否有效

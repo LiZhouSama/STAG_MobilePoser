@@ -7,6 +7,7 @@ mpl.rcParams['font.family'] = 'WenQuanYi Zen Hei'      # 使用文泉驿正黑:c
 mpl.rcParams['axes.unicode_minus'] = False       # 解决负号 '-' 显示为方块的问题
 from scipy.signal import find_peaks
 import os
+import argparse
 acc_scale = 1
 
 def smooth_imu_acceleration(acc_data, smooth_n=4, frame_rate=100):
@@ -510,9 +511,15 @@ def align_imu_data(data1, data2, max_shift=100):
     print(f"最佳对齐偏移量: {best_shift}, 相关系数: {best_corr:.4f}")
     return best_shift
 
-def process_imu_files(phone_file, watch_file, output_file):
+def process_imu_files(phone_file, watch_file, output_file, tr_acc=False):
     """
     处理两个IMU文件并生成对齐的数据，包含T-pose检测和坐标系变换
+    
+    Args:
+        phone_file: 手机数据文件路径
+        watch_file: 手表数据文件路径  
+        output_file: 输出文件路径
+        tr_acc: 是否将IMU本体系加速度转换到世界坐标系
     """
     # 读取数据
     print("读取数据文件...")
@@ -599,25 +606,73 @@ def process_imu_files(phone_file, watch_file, output_file):
     aligned_frames = min(len(phone_aligned), len(watch_aligned))
     phone_aligned = phone_aligned.iloc[:aligned_frames].copy().reset_index(drop=True)
     watch_aligned = watch_aligned.iloc[:aligned_frames].copy().reset_index(drop=True)
-    
     print(f"对齐后数据长度: {aligned_frames} 帧")
-    
+#-------------------------------imu数据处理--------------------------------
+    phone_acc_raw = phone_aligned[['lin_acc_x', 'lin_acc_y', 'lin_acc_z']].values / acc_scale
+    phone_ori_raw = phone_aligned[['ori_roll_deg', 'ori_pitch_deg', 'ori_yaw_deg']].values
+    watch_acc_raw = watch_aligned[['lin_acc_x', 'lin_acc_y', 'lin_acc_z']].values / acc_scale
+    watch_ori_raw = watch_aligned[['ori_roll_deg', 'ori_pitch_deg', 'ori_yaw_deg']].values
+
+    # 如果启用tr_acc，将IMU本体系加速度转换到世界坐标系
+    if tr_acc:
+        print("将IMU本体系加速度转换到世界坐标系（使用原始旋转数据）...")
+        
+        # 先将原始欧拉角转换为旋转矩阵
+        def euler_to_rotation_matrix(roll_deg, pitch_deg, yaw_deg):
+            """将欧拉角（度）转换为旋转矩阵"""
+            roll = np.deg2rad(roll_deg)
+            pitch = np.deg2rad(pitch_deg) 
+            yaw = np.deg2rad(yaw_deg)
+            
+            # 计算旋转矩阵 (ZYX欧拉角顺序)
+            cos_r, sin_r = np.cos(roll), np.sin(roll)
+            cos_p, sin_p = np.cos(pitch), np.sin(pitch)
+            cos_y, sin_y = np.cos(yaw), np.sin(yaw)
+            
+            # 构建IMU坐标系下的旋转矩阵
+            R = np.array([
+                [cos_y * cos_p, cos_y * sin_p * sin_r - sin_y * cos_r, cos_y * sin_p * cos_r + sin_y * sin_r],
+                [sin_y * cos_p, sin_y * sin_p * sin_r + cos_y * cos_r, sin_y * sin_p * cos_r - cos_y * sin_r],
+                [-sin_p, cos_p * sin_r, cos_p * cos_r]
+            ])
+            return R
+        
+        # 对手机加速度进行世界坐标系变换
+        phone_acc_world = np.zeros_like(phone_acc_raw)
+        for i in range(len(phone_acc_raw)):
+            # 获取当前帧的旋转矩阵
+            R_phone = euler_to_rotation_matrix(phone_ori_raw[i, 0], phone_ori_raw[i, 1], phone_ori_raw[i, 2])
+            # 使用旋转矩阵变换加速度向量（从本体坐标系到世界坐标系）
+            phone_acc_world[i] = R_phone @ phone_acc_raw[i]
+        
+        # 对手表加速度进行世界坐标系变换
+        watch_acc_world = np.zeros_like(watch_acc_raw)
+        for i in range(len(watch_acc_raw)):
+            # 获取当前帧的旋转矩阵
+            R_watch = euler_to_rotation_matrix(watch_ori_raw[i, 0], watch_ori_raw[i, 1], watch_ori_raw[i, 2])
+            # 使用旋转矩阵变换加速度向量（从本体坐标系到世界坐标系）
+            watch_acc_world[i] = R_watch @ watch_acc_raw[i]
+        
+        # 更新原始加速度数据
+        phone_acc_raw = phone_acc_world
+        watch_acc_raw = watch_acc_world
+        
+        print("IMU本体系到世界坐标系变换完成")
+
     # 提取特征数据并应用坐标系变换
     print("\n应用坐标系变换...")
     
     # 手机数据变换
-    phone_acc_raw = phone_aligned[['lin_acc_x', 'lin_acc_y', 'lin_acc_z']].values / acc_scale
-    phone_ori_raw = phone_aligned[['ori_roll_deg', 'ori_pitch_deg', 'ori_yaw_deg']].values
     phone_acc_transformed, phone_ori_transformed = apply_coordinate_transform(
         phone_acc_raw, phone_ori_raw, device_type='phone')
     
     # 手表数据变换
-    watch_acc_raw = watch_aligned[['lin_acc_x', 'lin_acc_y', 'lin_acc_z']].values / acc_scale
-    watch_ori_raw = watch_aligned[['ori_roll_deg', 'ori_pitch_deg', 'ori_yaw_deg']].values
     watch_acc_transformed, watch_ori_transformed = apply_coordinate_transform(
         watch_acc_raw, watch_ori_raw, device_type='watch')
     
     print("坐标系变换完成")
+    
+
     
     # 应用加速度平滑
     print("应用加速度平滑...")
@@ -731,7 +786,8 @@ def process_imu_files(phone_file, watch_file, output_file):
             'watch_tpose_original': (watch_tpose_start, watch_tpose_end),
             'coordinate_transformed': True,
             'orientation_normalized': True,
-            'rotation_format': 'matrix'  # 标记使用旋转矩阵格式
+            'rotation_format': 'matrix',  # 标记使用旋转矩阵格式
+            'world_frame_acceleration': tr_acc  # 标记是否转换到世界坐标系
         }
     }
     
@@ -916,7 +972,7 @@ def create_enhanced_visualization(phone_data, watch_data, processed_data,
         axes[2, 1].set_ylabel('角度 (度)')
         
         plt.tight_layout()
-        plt.savefig('mobileposer/stag_raw_data/enhanced_detection_results.png', dpi=150, bbox_inches='tight')
+        plt.savefig('STAGPoser/STAG_data/enhanced_detection_results.png', dpi=150, bbox_inches='tight')
         plt.close()
         
         print("增强检测结果图已保存为 enhanced_detection_results.png")
@@ -1060,7 +1116,7 @@ def create_transformation_comparison_visualization(
         fig.suptitle('坐标变换和方向归一化前后对比', fontsize=16, y=0.98)
         
         # 保存图像
-        plt.savefig('mobileposer/stag_raw_data/transformation_comparison.png', 
+        plt.savefig('STAGPoser/transformation_comparison.png', 
                    dpi=150, bbox_inches='tight')
         plt.close()
         
@@ -1103,10 +1159,17 @@ def create_transformation_comparison_visualization(
         traceback.print_exc()
 
 if __name__ == "__main__":
+    # 设置命令行参数解析
+    parser = argparse.ArgumentParser(description='处理STAG IMU数据，包含跳跃检测、T-pose检测和坐标变换')
+    parser.add_argument('--tr_acc', action='store_true', 
+                       help='将IMU本体系的加速度转换到世界坐标系中')
+    
+    args = parser.parse_args()
+    
     # 文件路径
-    phone_file = "mobileposer/stag_raw_data/IMUPoser_Phone9.csv"
-    watch_file = "mobileposer/stag_raw_data/IMUPoser_Watch9.csv"
-    output_file = "mobileposer/stag_raw_data/aligned_imu_data_normalized.pt"
+    phone_file = "STAGPoser/STAG_data/IMUPoser_Phone8.csv"
+    watch_file = "STAGPoser/STAG_data/IMUPoser_Watch8.csv"
+    output_file = "STAGPoser/STAG_data/aligned_imu_data_normalized.pt"
     
     # 检查文件是否存在
     if not os.path.exists(phone_file):
@@ -1119,11 +1182,13 @@ if __name__ == "__main__":
     
     # 处理数据
     try:
-        result = process_imu_files(phone_file, watch_file, output_file)
+        result = process_imu_files(phone_file, watch_file, output_file, tr_acc=args.tr_acc)
         print("\n=== 处理完成 ===")
         print(f"输出文件: {output_file}")
         print(f"对齐后帧数: {result['frame_count']}")
         print(f"IMU位置: {result['imu_positions']}")
+        if args.tr_acc:
+            print("已将加速度数据转换到世界坐标系")
         
     except Exception as e:
         print(f"处理过程中出现错误: {e}")
